@@ -1,0 +1,636 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en"><head>
+
+<meta charset="utf-8">
+<meta name="generator" content="quarto-1.10.18">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+
+
+<title>lv_ode</title>
+<style>
+/* Default styles provided by pandoc.
+** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
+*/
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: 1.5em;}
+div.column{flex: auto;}
+@media screen {
+div.columns{gap: min(4vw, 1.5em);}
+div.column{overflow-x: auto;}
+}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+  width: 0.8em;
+  margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
+  vertical-align: middle;
+}
+</style>
+
+
+<script src="lv_ode_files/libs/clipboard/clipboard.min.js"></script>
+<script src="lv_ode_files/libs/quarto-html/quarto.js" type="module"></script>
+<script src="lv_ode_files/libs/quarto-html/tabsets/tabsets.js" type="module"></script>
+<script src="lv_ode_files/libs/quarto-html/popper.min.js"></script>
+<script src="lv_ode_files/libs/quarto-html/tippy.umd.min.js"></script>
+<script src="lv_ode_files/libs/quarto-html/anchor.min.js"></script>
+<link href="lv_ode_files/libs/quarto-html/tippy.css" rel="stylesheet">
+<link href="lv_ode_files/libs/quarto-html/quarto-syntax-highlighting-64a204ab8560d761af7679ceaba22944.css" rel="stylesheet" id="quarto-text-highlighting-styles">
+<script src="lv_ode_files/libs/bootstrap/bootstrap.min.js"></script>
+<link href="lv_ode_files/libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
+<link href="lv_ode_files/libs/bootstrap/bootstrap-e9e25775a002af9983086ebb9b6f3df4.min.css" rel="stylesheet" append-hash="true" id="quarto-bootstrap" data-mode="light">
+
+
+</head>
+
+<body class="fullcontent quarto-light">
+
+<div id="quarto-content" class="page-columns page-rows-contents page-layout-article">
+
+<main class="content" id="quarto-document-content">
+
+
+
+
+<pre class="@meta"><code>EditURL = "../scripts/lv_ode.jl"</code></pre>
+<p>````<span class="citation" data-cites="example">@example</span> lv_ode using DrWatson <span class="citation" data-cites="quickactivate">@quickactivate</span> “project”</p>
+<p>using DifferentialEquations using DataFrames using StatsPlots using LaTeXStrings using Plots using Statistics using FFTW</p>
+<p>script_name = splitext(basename(PROGRAM_FILE))[1] mkpath(plotsdir(script_name)) mkpath(datadir(script_name))</p>
+<pre><code>
+Описание модели Лотки-Вольтерры
+
+````@example lv_ode
+"""
+Модель Лотки-Вольтерры (хищник-жертва)
+
+Система уравнений:
+  dx/dt = αx - βxy  # Изменение популяции жертв
+  dy/dt = δxy - γy  # Изменение популяции хищников
+
+Где:
+  x - популяция жертв (например, зайцы)
+  y - популяция хищников (например, лисы)
+  α - естественный прирост жертв (в отсутствие хищников)
+  β - коэффициент поедания жертв хищниками
+  δ - коэффициент прироста хищников за счет поедания жертв
+  γ - естественная смертность хищников (в отсутствие жертв)
+"""
+
+function lotka_volterra!(du, u, p, t)
+    x, y = u         # x - жертвы, y - хищники
+    α, β, δ, γ = p   # параметры модели
+
+    @inbounds begin
+    du[1] = α*x - β*x*y      # уравнение для жертв
+    du[2] = δ*x*y - γ*y      # уравнение для хищников
+    end
+    nothing
+end</code></pre>
+<p>Параметры модели и начальные условия Классические параметры из литературы</p>
+<p><code>@example lv_ode p_lv = [0.1,   # α: скорость размножения жертв     0.02,  # β: скорость поедания жертв хищниками     0.01,  # δ: коэффициент конверсии пищи (жертв) в хищников     0.3]   # γ: смертность хищников</code></p>
+<p>Начальные условия: [жертвы, хищники]</p>
+<p><code>@example lv_ode u0_lv = [40.0, 9.0]  # начальная популяция</code></p>
+<p>Временные параметры</p>
+<p><code>@example lv_ode tspan_lv = (0.0, 200.0)  # длительность симуляции dt_lv = 0.01              # шаг интегрирования</code></p>
+<p>Создание и решение задачи</p>
+<p><code>@example lv_ode prob_lv = ODEProblem(lotka_volterra!, u0_lv, tspan_lv, p_lv) sol_lv = solve(prob_lv,                dt = dt_lv,                Tsit5(),           # Метод 5-го порядка                reltol=1e-8,       # Относительная точность                abstol=1e-10,      # Абсолютная точность                saveat=0.1,        # Сохраняем каждые 0.1 единицы времени                dense=true         # Включаем плотный вывод для интерполяции )</code></p>
+<p>Подготовка данных</p>
+<p><code>@example lv_ode df_lv = DataFrame() df_lv[!, :t] = sol_lv.t df_lv[!, :prey] = [u[1] for u in sol_lv.u]  # жертвы df_lv[!, :predator] = [u[2] for u in sol_lv.u]  # хищники</code></p>
+<p>Рассчет производных для анализа</p>
+<p><code>@example lv_ode df_lv[!, :dprey_dt] = p_lv[1] .* df_lv.prey .- p_lv[2] .* df_lv.prey .* df_lv.predator df_lv[!, :dpredator_dt] = p_lv[3] .* df_lv.prey .* df_lv.predator .- p_lv[4] .* df_lv.predator</code></p>
+<p>Вывод информации о модели</p>
+<p><code>@example lv_ode println("="^60) println("Модель Лотки-Вольтерры (хищник-жертва)") println("="^60) println("\nПараметры модели:") println("α (скорость размножения жертв) = ", p_lv[1]) println("β (скорость поедания жертв) = ", p_lv[2]) println("δ (коэффициент конверсии) = ", p_lv[3]) println("γ (смертность хищников) = ", p_lv[4]) println("\nНачальные условия:") println("Жертвы (x₀) = ", u0_lv[1]) println("Хищники (y₀) = ", u0_lv[2])</code></p>
+<p>Стационарные точки (нулевые изоклины)</p>
+<p><code>@example lv_ode x_star = p_lv[4] / p_lv[3]  # стационарная точка для жертв y_star = p_lv[1] / p_lv[2]  # стационарная точка для хищников println("\nСтационарные точки (положения равновесия):") println("x* = γ/δ = ", round(x_star, digits=3)) println("y* = α/β = ", round(y_star, digits=3))</code></p>
+<p>Построение графиков</p>
+<p>График 1: Динамика популяций во времени</p>
+<p><code>@example lv_ode plt1 = plot(df_lv.t, [df_lv.prey df_lv.predator],     label=[L"Жертвы (x)" L"Хищники (y)"],     xlabel="Время",     ylabel="Популяция",     title="Модель Лотки-Вольтерры: Динамика популяций",     linewidth=2,     legend=:topright,     grid=true,     size=(900, 500),     color=[:green :red])</code></p>
+<p>Добавление стационарных уровней</p>
+<p><code>@example lv_ode hline!(plt1, [x_star], color=:green, linestyle=:dash, alpha=0.5, label="x* (равновесие жертв)") hline!(plt1, [y_star], color=:red, linestyle=:dash, alpha=0.5, label="y* (равновесие хищников)")</code></p>
+<p>График 2: Фазовый портрет (хищники vs жертвы)</p>
+<p><code>@example lv_ode plt2 = plot(df_lv.prey, df_lv.predator,     label="Фазовая траектория",     xlabel="Популяция жертв (x)",     ylabel="Популяция хищников (y)",     title="Фазовый портрет системы",     color=:blue,     linewidth=1.5,     grid=true,     size=(800, 600),     legend=:topright)</code></p>
+<p>Добавление стрелок направления на фазовом портрете</p>
+<p><code>@example lv_ode step = 50  # шаг для отображения стрелок for i in 1:step:length(df_lv.prey)-step     plot!(plt2, [df_lv.prey[i], df_lv.prey[i+step]],       [df_lv.predator[i], df_lv.predator[i+step]],       arrow=:closed, color=:blue, alpha=0.3, label=false) end</code></p>
+<p>Добавление стационарной точки</p>
+<p><code>@example lv_ode scatter!(plt2, [x_star], [y_star],     color=:black, markersize=8, label="Стационарная точка (x*, y*)")</code></p>
+<p>Изоклины (нулевого роста)</p>
+<p>````<span class="citation" data-cites="example">@example</span> lv_ode x_range = LinRange(0, maximum(df_lv.prey)<em>1.1, 100) y_nullcline = p_lv[1] ./ (p_lv[2] .</em> x_range) # y-изоклина (dy/dt = 0) plot!(plt2, x_range, y_nullcline, color=:red, linestyle=:dash, linewidth=1.5, label=“Изоклина хищников (dy/dt=0)”)</p>
+<p>y_range = LinRange(0, maximum(df_lv.predator)<em>1.1, 100) x_nullcline = p_lv[4] ./ (p_lv[3] .</em> ones(length(y_range))) # x-изоклина (dx/dt = 0) plot!(plt2, x_nullcline, y_range, color=:green, linestyle=:dash, linewidth=1.5, label=“Изоклина жертв (dx/dt=0)”)</p>
+<pre><code>
+График 3: Производные (скорости изменения)
+
+````@example lv_ode
+plt3 = plot(df_lv.t, [df_lv.dprey_dt df_lv.dpredator_dt],
+    label=[L"dx/dt" L"dy/dt"],
+    xlabel="Время",
+    ylabel="Скорость изменения",
+    title="Производные популяций",
+    linewidth=1.5,
+    legend=:topright,
+    grid=true,
+    size=(900, 400),
+    color=[:green :red])
+
+hline!(plt3, [0], color=:black, linestyle=:solid, alpha=0.3, label=false)</code></pre>
+<p>График 4: Относительные изменения (в %)</p>
+<p>````<span class="citation" data-cites="example">@example</span> lv_ode df_lv[!, :prey_pct_change] = df_lv.dprey_dt ./ df_lv.prey .* 100 df_lv[!, :predator_pct_change] = df_lv.dpredator_dt ./ df_lv.predator .* 100</p>
+<p>plt4 = plot(df_lv.t, [df_lv.prey_pct_change df_lv.predator_pct_change], label=[L”dx/dt / x (%)” L”dy/dt / y (%)”], xlabel=“Время”, ylabel=“Относительное изменение, %”, title=“Относительные темпы роста”, linewidth=1.5, legend=:topright, grid=true, size=(900, 400), color=[:green :red])</p>
+<pre><code>
+График 5: Спектральный анализ (быстрое преобразование Фурье)
+
+````@example lv_ode
+function compute_fft(signal, dt)
+    n = length(signal)</code></pre>
+<p>Используем rfft для вещественных сигналов (возвращает только положительные частоты)</p>
+<p><code>@example lv_ode     spectrum = abs.(rfft(signal))</code></p>
+<p>Соответствующие частоты для rfft</p>
+<p><code>@example lv_ode     freq = rfftfreq(n, 1/dt)     return freq, spectrum end</code></p>
+<p>Вычисление периодов колебаний</p>
+<p>````<span class="citation" data-cites="example">@example</span> lv_ode freq_prey, spectrum_prey = compute_fft(df_lv.prey .- mean(df_lv.prey), dt_lv) freq_predator, spectrum_predator = compute_fft(df_lv.predator .- mean(df_lv.predator), dt_lv)</p>
+<p>plt5 = plot(freq_prey, [spectrum_prey spectrum_predator], label=[L”Жертвы (x)” L”Хищники (y)”], xlabel=“Частота”, ylabel=“Амплитуда”, title=“Спектральный анализ (Фурье)”, linewidth=1.5, xscale=:log10, yscale=:log10, legend=:topright, grid=true, size=(800, 400), color=[:green :red])</p>
+<pre><code>
+Нахождение доминирующих частот
+
+````@example lv_ode
+if length(spectrum_prey) &gt; 0
+    idx_prey = argmax(spectrum_prey[2:end]) + 1  # пропускаем нулевую частоту
+    dominant_freq_prey = freq_prey[idx_prey]
+    period_prey = 1/dominant_freq_prey
+    println("\nДоминирующая частота колебаний жертв: ", round(dominant_freq_prey, digits=4), " Гц")
+    println("Период колебаний жертв: ", round(period_prey, digits=2), " единиц времени")
+end</code></pre>
+<p>График 6: Компактная панель всех графиков</p>
+<p>````<span class="citation" data-cites="example">@example</span> lv_ode plt6 = plot(layout=(3, 2), size=(1200, 900))</p>
+<p>plot!(plt6[1], df_lv.t, df_lv.prey, label=L”x(t)“, color=:green, linewidth=2, title=”Популяция жертв”, grid=true) plot!(plt6[2], df_lv.t, df_lv.predator, label=L”y(t)“, color=:red, linewidth=2, title=”Популяция хищников”, grid=true) plot!(plt6[3], df_lv.prey, df_lv.predator, label=false, color=:blue, linewidth=1.5, title=“Фазовый портрет”, xlabel=L”x”, ylabel=L”y”, grid=true) scatter!(plt6[3], [x_star], [y_star], color=:black, markersize=5, label=“(x<em>, y</em>)”) plot!(plt6[4], df_lv.t, [df_lv.dprey_dt df_lv.dpredator_dt], label=[L”dx/dt” L”dy/dt”], color=[:green :red], linewidth=1.5, title=“Скорости изменения”, grid=true, legend=:topright) plot!(plt6[5], freq_prey, spectrum_prey, label=L”x”, color=:green, linewidth=1.5, title=“Спектр жертв”, xscale=:log10, yscale=:log10, grid=true) plot!(plt6[6], df_lv.t, [df_lv.prey_pct_change df_lv.predator_pct_change], label=[L”dx/x” L”dy/y”], color=[:green :red], linewidth=1.5, title=“Относительные изменения”, grid=true, legend=:topright)</p>
+<pre><code>
+Анализ результатов
+
+````@example lv_ode
+println("\n" * "="^60)
+println("Анализ результатов")
+println("="^60)
+
+println("\nОсновные статистики:")
+println("Жертвы: min = ", round(minimum(df_lv.prey), digits=2),
+        ", max = ", round(maximum(df_lv.prey), digits=2),
+        ", mean = ", round(mean(df_lv.prey), digits=2))
+println("Хищники: min = ", round(minimum(df_lv.predator), digits=2),
+        ", max = ", round(maximum(df_lv.predator), digits=2),
+        ", mean = ", round(mean(df_lv.predator), digits=2))</code></pre>
+<p>Упрощенный анализ колебаний без поиска максимумов Вместо сложного анализа сдвига фаз, просто посчитаем основные характеристики</p>
+<p>Находим время первого пика жертв (простой алгоритм)</p>
+<p>````<span class="citation" data-cites="example">@example</span> lv_ode function find_first_peak(signal, time) for i in 2:length(signal)-1 if signal[i] &gt; signal[i-1] &amp;&amp; signal[i] &gt; signal[i+1] return time[i], signal[i] end end return NaN, NaN end</p>
+<p>peak_time_prey, peak_value_prey = find_first_peak(df_lv.prey, df_lv.t) peak_time_predator, peak_value_predator = find_first_peak(df_lv.predator, df_lv.t)</p>
+<p>if !isnan(peak_time_prey) &amp;&amp; !isnan(peak_time_predator) phase_shift = peak_time_predator - peak_time_prey println(“колебаний:”) println(“Первый пик жертв: время =”, round(peak_time_prey, digits=2), “, значение =”, round(peak_value_prey, digits=2)) println(“Первый пик хищников: время =”, round(peak_time_predator, digits=2), “, значение =”, round(peak_value_predator, digits=2)) println(“Сдвиг фаз (хищники отстают):”, round(phase_shift, digits=2)) end</p>
+<pre><code>
+Сохранение графиков
+
+````@example lv_ode
+savefig(plt1, plotsdir(script_name, "lv_dynamics.png"))
+savefig(plt2, plotsdir(script_name, "lv_phase_portrait.png"))
+savefig(plt3, plotsdir(script_name, "lv_derivatives.png"))
+savefig(plt4, plotsdir(script_name, "lv_relative_changes.png"))
+savefig(plt5, plotsdir(script_name, "lv_spectrum.png"))
+savefig(plt6, plotsdir(script_name, "lv_panel.png"))</code></pre>
+<p>Дополнительный анализ: чувствительность к параметрам</p>
+<p><code>@example lv_ode println("\n\n" * "="^60) println("Анализ чувствительности") println("="^60)</code></p>
+<p>Функция для анализа влияния параметров</p>
+<p>````<span class="citation" data-cites="example">@example</span> lv_ode function analyze_parameter_sensitivity(param_index, values, param_name) println(“чувствительности к параметру:”, param_name) results = []</p>
+<pre><code>for val in values
+p_test = copy(p_lv)
+p_test[param_index] = val
+prob_test = ODEProblem(lotka_volterra!, u0_lv, tspan_lv, p_test)
+sol_test = solve(prob_test, dt = dt_lv)
+prey_end = sol_test.u[end][1]
+predator_end = sol_test.u[end][2]
+
+push!(results, (param=val, prey=prey_end, predator=predator_end))
+println("  $(param_name)=$(val): жертвы=$(round(prey_end,2)), хищники=$(round(predator_end,2))")
+end
+return results</code></pre>
+<p>end</p>
+<pre><code>
+Анализ чувствительности к ключевым параметрам
+
+````@example lv_ode
+if false  # Установите в true для выполнения анализа
+    println("\n1. Влияние скорости размножения жертв (α):")
+    analyze_parameter_sensitivity(1, [0.05, 0.1, 0.2, 0.3], "α")
+
+    println("\n2. Влияние смертности хищников (γ):")
+    analyze_parameter_sensitivity(4, [0.1, 0.3, 0.5, 0.7], "γ")
+end
+
+println("\nМоделирование завершено успешно!")</code></pre>
+<hr>
+<p><em>This page was generated using <a href="https://github.com/fredrikekre/Literate.jl">Literate.jl</a>.</em></p>
+
+</main>
+<!-- /main column -->
+<script id="quarto-html-after-body" type="application/javascript">
+  window.document.addEventListener("DOMContentLoaded", function (event) {
+    const icon = "";
+    const anchorJS = new window.AnchorJS();
+    anchorJS.options = {
+      placement: 'right',
+      icon: icon
+    };
+    anchorJS.add('.anchored');
+    const isCodeAnnotation = (el) => {
+      for (const clz of el.classList) {
+        if (clz.startsWith('code-annotation-')) {                     
+          return true;
+        }
+      }
+      return false;
+    }
+    const onCopySuccess = function(e) {
+      // button target
+      const button = e.trigger;
+      // don't keep focus
+      button.blur();
+      // flash "checked"
+      button.classList.add('code-copy-button-checked');
+      var currentTitle = button.getAttribute("title");
+      button.setAttribute("title", "Copied!");
+      let tooltip;
+      if (window.bootstrap) {
+        button.setAttribute("data-bs-toggle", "tooltip");
+        button.setAttribute("data-bs-placement", "left");
+        button.setAttribute("data-bs-title", "Copied!");
+        tooltip = new bootstrap.Tooltip(button, 
+          { trigger: "manual", 
+            customClass: "code-copy-button-tooltip",
+            offset: [0, -8]});
+        tooltip.show();    
+      }
+      setTimeout(function() {
+        if (tooltip) {
+          tooltip.hide();
+          button.removeAttribute("data-bs-title");
+          button.removeAttribute("data-bs-toggle");
+          button.removeAttribute("data-bs-placement");
+        }
+        button.setAttribute("title", currentTitle);
+        button.classList.remove('code-copy-button-checked');
+      }, 1000);
+      // clear code selection
+      e.clearSelection();
+    }
+    const getTextToCopy = function(trigger) {
+      const outerScaffold = trigger.parentElement.cloneNode(true);
+      const codeEl = outerScaffold.querySelector('code');
+      for (const childEl of codeEl.children) {
+        if (isCodeAnnotation(childEl)) {
+          childEl.remove();
+        }
+      }
+      return codeEl.innerText;
+    }
+    const clipboard = new window.ClipboardJS('.code-copy-button:not([data-in-quarto-modal])', {
+      text: getTextToCopy
+    });
+    clipboard.on('success', onCopySuccess);
+    if (window.document.getElementById('quarto-embedded-source-code-modal')) {
+      const clipboardModal = new window.ClipboardJS('.code-copy-button[data-in-quarto-modal]', {
+        text: getTextToCopy,
+        container: window.document.getElementById('quarto-embedded-source-code-modal')
+      });
+      clipboardModal.on('success', onCopySuccess);
+    }
+      var localhostRegex = new RegExp(/^(?:http|https):\/\/localhost\:?[0-9]*\//);
+      var mailtoRegex = new RegExp(/^mailto:/);
+        var filterRegex = new RegExp('/' + window.location.host + '/');
+      var isInternal = (href) => {
+          return filterRegex.test(href) || localhostRegex.test(href) || mailtoRegex.test(href);
+      }
+      // Inspect non-navigation links and adorn them if external
+     var links = window.document.querySelectorAll('a[href]:not(.nav-link):not(.navbar-brand):not(.toc-action):not(.sidebar-link):not(.sidebar-item-toggle):not(.pagination-link):not(.no-external):not([aria-hidden]):not(.dropdown-item):not(.quarto-navigation-tool):not(.about-link)');
+      for (var i=0; i<links.length; i++) {
+        const link = links[i];
+        if (!isInternal(link.href)) {
+          // undo the damage that might have been done by quarto-nav.js in the case of
+          // links that we want to consider external
+          if (link.dataset.originalHref !== undefined) {
+            link.href = link.dataset.originalHref;
+          }
+        }
+      }
+    function tippyHover(el, contentFn, onTriggerFn, onUntriggerFn) {
+      const config = {
+        allowHTML: true,
+        maxWidth: 500,
+        delay: 100,
+        arrow: false,
+        appendTo: function(el) {
+            return el.parentElement;
+        },
+        interactive: true,
+        interactiveBorder: 10,
+        theme: 'quarto',
+        placement: 'bottom-start',
+      };
+      if (contentFn) {
+        config.content = contentFn;
+      }
+      if (onTriggerFn) {
+        config.onTrigger = onTriggerFn;
+      }
+      if (onUntriggerFn) {
+        config.onUntrigger = onUntriggerFn;
+      }
+      window.tippy(el, config); 
+    }
+    const noterefs = window.document.querySelectorAll('a[role="doc-noteref"]');
+    for (var i=0; i<noterefs.length; i++) {
+      const ref = noterefs[i];
+      tippyHover(ref, function() {
+        // use id or data attribute instead here
+        let href = ref.getAttribute('data-footnote-href') || ref.getAttribute('href');
+        try { href = new URL(href).hash; } catch {}
+        const id = href.replace(/^#\/?/, "");
+        const note = window.document.getElementById(id);
+        if (note) {
+          return note.innerHTML;
+        } else {
+          return "";
+        }
+      });
+    }
+    const xrefs = window.document.querySelectorAll('a.quarto-xref');
+    const processXRef = (id, note) => {
+      // Strip column container classes
+      const stripColumnClz = (el) => {
+        el.classList.remove("page-full", "page-columns");
+        if (el.children) {
+          for (const child of el.children) {
+            stripColumnClz(child);
+          }
+        }
+      }
+      stripColumnClz(note)
+      if (id === null || id.startsWith('sec-')) {
+        // Special case sections, only their first couple elements
+        const container = document.createElement("div");
+        if (note.children && note.children.length > 2) {
+          container.appendChild(note.children[0].cloneNode(true));
+          for (let i = 1; i < note.children.length; i++) {
+            const child = note.children[i];
+            if (child.tagName === "P" && child.innerText === "") {
+              continue;
+            } else {
+              container.appendChild(child.cloneNode(true));
+              break;
+            }
+          }
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(container);
+          }
+          return container.innerHTML
+        } else {
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(note);
+          }
+          return note.innerHTML;
+        }
+      } else {
+        // Remove any anchor links if they are present
+        const anchorLink = note.querySelector('a.anchorjs-link');
+        if (anchorLink) {
+          anchorLink.remove();
+        }
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(note);
+        }
+        if (note.classList.contains("callout")) {
+          return note.outerHTML;
+        } else {
+          return note.innerHTML;
+        }
+      }
+    }
+    for (var i=0; i<xrefs.length; i++) {
+      const xref = xrefs[i];
+      tippyHover(xref, undefined, function(instance) {
+        instance.disable();
+        let url = xref.getAttribute('href');
+        let hash = undefined; 
+        if (url.startsWith('#')) {
+          hash = url;
+        } else {
+          try { hash = new URL(url).hash; } catch {}
+        }
+        if (hash) {
+          const id = hash.replace(/^#\/?/, "");
+          const note = window.document.getElementById(id);
+          if (note !== null) {
+            try {
+              const html = processXRef(id, note.cloneNode(true));
+              instance.setContent(html);
+            } finally {
+              instance.enable();
+              instance.show();
+            }
+          } else {
+            // See if we can fetch this
+            fetch(url.split('#')[0])
+            .then(res => res.text())
+            .then(html => {
+              const parser = new DOMParser();
+              const htmlDoc = parser.parseFromString(html, "text/html");
+              const note = htmlDoc.getElementById(id);
+              if (note !== null) {
+                const html = processXRef(id, note);
+                instance.setContent(html);
+              } 
+            }).finally(() => {
+              instance.enable();
+              instance.show();
+            });
+          }
+        } else {
+          // See if we can fetch a full url (with no hash to target)
+          // This is a special case and we should probably do some content thinning / targeting
+          fetch(url)
+          .then(res => res.text())
+          .then(html => {
+            const parser = new DOMParser();
+            const htmlDoc = parser.parseFromString(html, "text/html");
+            const note = htmlDoc.querySelector('main.content');
+            if (note !== null) {
+              // This should only happen for chapter cross references
+              // (since there is no id in the URL)
+              // remove the first header
+              if (note.children.length > 0 && note.children[0].tagName === "HEADER") {
+                note.children[0].remove();
+              }
+              const html = processXRef(null, note);
+              instance.setContent(html);
+            } 
+          }).finally(() => {
+            instance.enable();
+            instance.show();
+          });
+        }
+      }, function(instance) {
+      });
+    }
+        let selectedAnnoteEl;
+        const selectorForAnnotation = ( cell, annotation) => {
+          let cellAttr = 'data-code-cell="' + cell + '"';
+          let lineAttr = 'data-code-annotation="' +  annotation + '"';
+          const selector = 'span[' + cellAttr + '][' + lineAttr + ']';
+          return selector;
+        }
+        const selectCodeLines = (annoteEl) => {
+          const doc = window.document;
+          const targetCell = annoteEl.getAttribute("data-target-cell");
+          const targetAnnotation = annoteEl.getAttribute("data-target-annotation");
+          const annoteSpan = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+          const lines = annoteSpan.getAttribute("data-code-lines").split(",");
+          const lineIds = lines.map((line) => {
+            return targetCell + "-" + line;
+          })
+          let top = null;
+          let height = null;
+          let parent = null;
+          if (lineIds.length > 0) {
+              //compute the position of the single el (top and bottom and make a div)
+              const el = window.document.getElementById(lineIds[0]);
+              top = el.offsetTop;
+              height = el.offsetHeight;
+              parent = el.parentElement.parentElement;
+            if (lineIds.length > 1) {
+              const lastEl = window.document.getElementById(lineIds[lineIds.length - 1]);
+              const bottom = lastEl.offsetTop + lastEl.offsetHeight;
+              height = bottom - top;
+            }
+            if (top !== null && height !== null && parent !== null) {
+              // cook up a div (if necessary) and position it 
+              let div = window.document.getElementById("code-annotation-line-highlight");
+              if (div === null) {
+                div = window.document.createElement("div");
+                div.setAttribute("id", "code-annotation-line-highlight");
+                div.style.position = 'absolute';
+                parent.appendChild(div);
+              }
+              div.style.top = top - 2 + "px";
+              div.style.height = height + 4 + "px";
+              div.style.left = 0;
+              let gutterDiv = window.document.getElementById("code-annotation-line-highlight-gutter");
+              if (gutterDiv === null) {
+                gutterDiv = window.document.createElement("div");
+                gutterDiv.setAttribute("id", "code-annotation-line-highlight-gutter");
+                gutterDiv.style.position = 'absolute';
+                const codeCell = window.document.getElementById(targetCell);
+                const gutter = codeCell.querySelector('.code-annotation-gutter');
+                gutter.appendChild(gutterDiv);
+              }
+              gutterDiv.style.top = top - 2 + "px";
+              gutterDiv.style.height = height + 4 + "px";
+            }
+            selectedAnnoteEl = annoteEl;
+          }
+        };
+        const unselectCodeLines = () => {
+          const elementsIds = ["code-annotation-line-highlight", "code-annotation-line-highlight-gutter"];
+          elementsIds.forEach((elId) => {
+            const div = window.document.getElementById(elId);
+            if (div) {
+              div.remove();
+            }
+          });
+          selectedAnnoteEl = undefined;
+        };
+          // Handle positioning of the toggle
+      window.addEventListener(
+        "resize",
+        throttle(() => {
+          elRect = undefined;
+          if (selectedAnnoteEl) {
+            selectCodeLines(selectedAnnoteEl);
+          }
+        }, 10)
+      );
+      function throttle(fn, ms) {
+      let throttle = false;
+      let timer;
+        return (...args) => {
+          if(!throttle) { // first call gets through
+              fn.apply(this, args);
+              throttle = true;
+          } else { // all the others get throttled
+              if(timer) clearTimeout(timer); // cancel #2
+              timer = setTimeout(() => {
+                fn.apply(this, args);
+                timer = throttle = false;
+              }, ms);
+          }
+        };
+      }
+        // Attach click handler to the DT
+        const annoteDls = window.document.querySelectorAll('dt[data-target-cell]');
+        for (const annoteDlNode of annoteDls) {
+          annoteDlNode.addEventListener('click', (event) => {
+            const clickedEl = event.target;
+            if (clickedEl !== selectedAnnoteEl) {
+              unselectCodeLines();
+              const activeEl = window.document.querySelector('dt[data-target-cell].code-annotation-active');
+              if (activeEl) {
+                activeEl.classList.remove('code-annotation-active');
+              }
+              selectCodeLines(clickedEl);
+              clickedEl.classList.add('code-annotation-active');
+            } else {
+              // Unselect the line
+              unselectCodeLines();
+              clickedEl.classList.remove('code-annotation-active');
+            }
+          });
+        }
+    const findCites = (el) => {
+      const parentEl = el.parentElement;
+      if (parentEl) {
+        const cites = parentEl.dataset.cites;
+        if (cites) {
+          return {
+            el,
+            cites: cites.split(' ')
+          };
+        } else {
+          return findCites(el.parentElement)
+        }
+      } else {
+        return undefined;
+      }
+    };
+    var bibliorefs = window.document.querySelectorAll('a[role="doc-biblioref"]');
+    for (var i=0; i<bibliorefs.length; i++) {
+      const ref = bibliorefs[i];
+      const citeInfo = findCites(ref);
+      if (citeInfo) {
+        tippyHover(citeInfo.el, function() {
+          var popup = window.document.createElement('div');
+          citeInfo.cites.forEach(function(cite) {
+            var citeDiv = window.document.createElement('div');
+            citeDiv.classList.add('hanging-indent');
+            citeDiv.classList.add('csl-entry');
+            var biblioDiv = window.document.getElementById('ref-' + cite);
+            if (biblioDiv) {
+              citeDiv.innerHTML = biblioDiv.innerHTML;
+            }
+            popup.appendChild(citeDiv);
+          });
+          return popup.innerHTML;
+        });
+      }
+    }
+  });
+  </script>
+</div> <!-- /content -->
+
+
+
+
+</body></html>
