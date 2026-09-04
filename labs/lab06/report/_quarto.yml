@@ -2,6 +2,10 @@ project:
   title: "report"
   output-dir: "_output"
 
+engine: julia
+julia:
+  exeflags: ["--project=../project"]
+  
 standalone: true
 self-contained: true
 
