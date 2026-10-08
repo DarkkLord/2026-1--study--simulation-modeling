@@ -1,0 +1,513 @@
+using DrWatson
+
+@quickactivate "project"
+
+using DataFrames
+using CSV
+using Plots
+using Statistics
+
+include(srcdir("repair_model.jl"))
+
+using .RepairModel
+
+const RUNS = 20
+
+const MACHINE_COUNTS = [5, 10, 15, 20, 30]
+
+const REPAIRER_COUNTS = [1, 2, 3, 4]
+
+const LAMBDA = 1 / 100
+
+const MU = 1.0
+
+const SIM_TIME = 10_000.0
+
+const DT = 1.0
+
+const SEED = 150
+
+const WARMUP_FRACTION = 0.10
+
+mkpath(datadir("results"))
+mkpath(plotsdir())
+
+function analytical_solution(
+    N::Int,
+    R::Int,
+    lambda::Float64,
+    mu::Float64,
+)
+
+    weights = ones(Float64, N + 1)
+
+    for k in 1:N
+
+        birth_rate = (N - k + 1) * lambda
+        death_rate = min(k, R) * mu
+
+        weights[k + 1] =
+            weights[k] * birth_rate / death_rate
+    end
+
+    probabilities = weights ./ sum(weights)
+
+    healthy = 0.0
+    failed = 0.0
+    queue = 0.0
+    busy = 0.0
+
+    for k in 0:N
+
+        p = probabilities[k + 1]
+
+        healthy += (N - k) * p
+        failed += k * p
+        queue += max(k - R, 0) * p
+        busy += min(k, R) * p
+    end
+
+    utilization = busy / R
+
+    return (
+        healthy = healthy,
+        failed = failed,
+        queue = queue,
+        utilization = utilization,
+    )
+end
+
+println()
+println("==============================================")
+println(" MACHINE REPAIR SIMULATION")
+println("==============================================")
+println()
+
+println("Runs:              ", RUNS)
+println("Machines:          ", MACHINE_COUNTS)
+println("Repairmen:         ", REPAIRER_COUNTS)
+println("Failure rate λ:    ", LAMBDA)
+println("Repair rate μ:     ", MU)
+println("Simulation time:   ", SIM_TIME)
+println()
+
+raw_results = DataFrame(
+    N = Int[],
+    R = Int[],
+    run = Int[],
+    healthy = Float64[],
+    failed = Float64[],
+    queue = Float64[],
+    utilization = Float64[],
+)
+
+for N in MACHINE_COUNTS
+
+    for R in REPAIRER_COUNTS
+
+        println("Running N = $N, R = $R")
+
+        for run_id in 1:RUNS
+
+            df = RepairModel.run_simulation(
+                N = N,
+                R = R,
+                lambda = LAMBDA,
+                mu = MU,
+                sim_time = SIM_TIME,
+                dt = DT,
+                seed = SEED + run_id,
+            )
+
+            warmup_time = SIM_TIME * WARMUP_FRACTION
+
+            steady = filter(
+                row -> row.time >= warmup_time,
+                df,
+            )
+
+            avg_healthy = mean(steady.healthy)
+            avg_failed = mean(steady.failed)
+            avg_queue = mean(steady.queue)
+            avg_utilization = mean(steady.utilization)
+
+            push!(
+                raw_results,
+                (
+                    N = N,
+                    R = R,
+                    run = run_id,
+                    healthy = avg_healthy,
+                    failed = avg_failed,
+                    queue = avg_queue,
+                    utilization = avg_utilization,
+                ),
+            )
+        end
+    end
+end
+
+CSV.write(
+    datadir("results", "raw_results.csv"),
+    raw_results,
+)
+
+simulation_results = combine(
+    groupby(raw_results, [:N, :R]),
+
+    :healthy =>
+        mean =>
+        :healthy_sim,
+
+    :failed =>
+        mean =>
+        :failed_sim,
+
+    :queue =>
+        mean =>
+        :queue_sim,
+
+    :utilization =>
+        mean =>
+        :utilization_sim,
+)
+
+
+CSV.write(
+    datadir("results", "simulation.csv"),
+    simulation_results,
+)
+
+analytical_results = DataFrame(
+    N = Int[],
+    R = Int[],
+    healthy_analytical = Float64[],
+    failed_analytical = Float64[],
+    queue_analytical = Float64[],
+    utilization_analytical = Float64[],
+)
+
+
+for N in MACHINE_COUNTS
+
+    for R in REPAIRER_COUNTS
+
+        result = analytical_solution(
+            N,
+            R,
+            LAMBDA,
+            MU,
+        )
+
+        push!(
+            analytical_results,
+            (
+                N = N,
+                R = R,
+                healthy_analytical = result.healthy,
+                failed_analytical = result.failed,
+                queue_analytical = result.queue,
+                utilization_analytical = result.utilization,
+            ),
+        )
+    end
+end
+
+
+CSV.write(
+    datadir("results", "analytical.csv"),
+    analytical_results,
+)
+
+comparison = innerjoin(
+    simulation_results,
+    analytical_results,
+    on = [:N, :R],
+)
+
+
+comparison.healthy_error =
+    comparison.healthy_sim -
+    comparison.healthy_analytical
+
+comparison.failed_error =
+    comparison.failed_sim -
+    comparison.failed_analytical
+
+comparison.queue_error =
+    comparison.queue_sim -
+    comparison.queue_analytical
+
+comparison.utilization_error =
+    comparison.utilization_sim -
+    comparison.utilization_analytical
+
+
+CSV.write(
+    datadir("results", "comparison.csv"),
+    comparison,
+)
+
+println()
+println("==============================================")
+println(" SIMULATION RESULTS")
+println("==============================================")
+println()
+
+show(
+    simulation_results,
+    allrows = true,
+    allcols = true,
+)
+
+println()
+
+
+println()
+println("==============================================")
+println(" ANALYTICAL RESULTS")
+println("==============================================")
+println()
+
+show(
+    analytical_results,
+    allrows = true,
+    allcols = true,
+)
+
+println()
+
+
+println()
+println("==============================================")
+println(" COMPARISON")
+println("==============================================")
+println()
+
+show(
+    comparison,
+    allrows = true,
+    allcols = true,
+)
+
+println()
+
+println()
+println("Creating healthy machines plot...")
+
+
+p1 = plot(
+    xlabel = "Time",
+    ylabel = "Healthy machines",
+    title = "Number of healthy machines over time",
+)
+
+N_plot = 20
+
+
+for R in REPAIRER_COUNTS
+
+    df = RepairModel.run_simulation(
+        N = N_plot,
+        R = R,
+        lambda = LAMBDA,
+        mu = MU,
+        sim_time = SIM_TIME,
+        dt = DT,
+        seed = SEED,
+    )
+
+    plot!(
+        p1,
+        df.time,
+        df.healthy,
+        label = "R = $R",
+    )
+end
+
+
+savefig(
+    p1,
+    plotsdir("healthy_machines.png"),
+)
+
+println("Creating queue plot...")
+
+
+p2 = plot(
+    xlabel = "Number of machines",
+    ylabel = "Average queue length",
+    title = "Average repair queue",
+)
+
+
+for R in REPAIRER_COUNTS
+
+    data = filter(
+        row -> row.R == R,
+        comparison,
+    )
+
+    plot!(
+        p2,
+        data.N,
+        data.queue_sim,
+        marker = :circle,
+        label = "Simulation, R = $R",
+    )
+
+    plot!(
+        p2,
+        data.N,
+        data.queue_analytical,
+        marker = :square,
+        linestyle = :dash,
+        label = "Analytical, R = $R",
+    )
+end
+
+
+savefig(
+    p2,
+    plotsdir("queue_length.png"),
+)
+
+println("Creating utilization plot...")
+
+
+p3 = plot(
+    xlabel = "Number of machines",
+    ylabel = "Repairer utilization",
+    title = "Repairer utilization",
+    ylim = (0, 1.05),
+)
+
+
+for R in REPAIRER_COUNTS
+
+    data = filter(
+        row -> row.R == R,
+        comparison,
+    )
+
+    plot!(
+        p3,
+        data.N,
+        data.utilization_sim,
+        marker = :circle,
+        label = "Simulation, R = $R",
+    )
+
+    plot!(
+        p3,
+        data.N,
+        data.utilization_analytical,
+        marker = :square,
+        linestyle = :dash,
+        label = "Analytical, R = $R",
+    )
+end
+
+
+savefig(
+    p3,
+    plotsdir("repairer_utilization.png"),
+)
+
+println("Creating analytical comparison plot...")
+
+R_plot = 3
+
+data = filter(
+    row -> row.R == R_plot,
+    comparison,
+)
+
+
+p4 = plot(
+    xlabel = "Number of machines",
+    ylabel = "Average healthy machines",
+    title = "Simulation vs analytical solution, R = $R_plot",
+)
+
+
+plot!(
+    p4,
+    data.N,
+    data.healthy_sim,
+    marker = :circle,
+    label = "Simulation",
+)
+
+
+plot!(
+    p4,
+    data.N,
+    data.healthy_analytical,
+    marker = :square,
+    linestyle = :dash,
+    label = "Analytical",
+)
+
+
+savefig(
+    p4,
+    plotsdir("analytical_vs_simulation.png"),
+)
+
+println("Creating error plot...")
+
+
+data = filter(
+    row -> row.R == R_plot,
+    comparison,
+)
+
+
+relative_error = abs.(
+    data.healthy_sim -
+    data.healthy_analytical
+) ./ data.healthy_analytical .* 100
+
+
+p5 = plot(
+    data.N,
+    relative_error,
+    marker = :circle,
+    xlabel = "Number of machines",
+    ylabel = "Relative error, %",
+    title = "Simulation error vs analytical solution",
+    label = "Healthy machines",
+)
+
+
+savefig(
+    p5,
+    plotsdir("relative_error.png"),
+)
+
+println()
+println("==============================================")
+println(" DONE")
+println("==============================================")
+println()
+
+println("Results:")
+println("  ", datadir("results"))
+
+println()
+println("Plots:")
+println("  ", plotsdir())
+
+println()
+println("Generated files:")
+println("  data/results/raw_results.csv")
+println("  data/results/simulation.csv")
+println("  data/results/analytical.csv")
+println("  data/results/comparison.csv")
+println()
+println("  plots/healthy_machines.png")
+println("  plots/queue_length.png")
+println("  plots/repairer_utilization.png")
+println("  plots/analytical_vs_simulation.png")
+println("  plots/relative_error.png")
